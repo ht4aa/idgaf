@@ -63,6 +63,13 @@ const int SWEEP_MIN  = 4;
 const int SWEEP_MAX  = 180;
 const int SWEEP_STEP = 2;
 
+// ---------- Target Lock ----------
+// After each sweep, ring the closest contact with an animated reticle and
+// raise a flashing border alert if it is inside ALERT_CM. Toggle live with 'l'.
+#define DEFAULT_LOCK_ON true     // start with target-lock enabled?
+const int ALERT_CM = 20;         // proximity-alert danger zone
+bool gLockEnabled  = DEFAULT_LOCK_ON;
+
 // ============================================================================
 //  Theme
 // ============================================================================
@@ -170,6 +177,7 @@ void loop(void)
 //  Runtime serial commands (polled during the sweep)
 //    g  -> "go crazy" servo dance
 //    c  -> open the calibration menu
+//    l  -> toggle Target Lock on/off
 // ============================================================================
 void checkSerialCommand(void)
 {
@@ -177,6 +185,11 @@ void checkSerialCommand(void)
   char cmd = Serial.read();
   if (cmd == 'g')      crazyServo();
   else if (cmd == 'c') runCalibrationMenu();
+  else if (cmd == 'l') {
+    gLockEnabled = !gLockEnabled;
+    Serial.print(F("Target Lock: "));
+    Serial.println(gLockEnabled ? F("ON") : F("OFF"));
+  }
 }
 
 // Wild random servo dance with an on-screen banner. ~3 seconds, then resumes.
@@ -533,8 +546,13 @@ void sweep(int start, int end, int step)
   cls();
   fix();
 
+  // Track the nearest in-range contact for Target Lock.
+  int  bestDist = MAX_RANGE_CM;
+  int  bestDeg  = 0;
+  bool locked   = false;
+
   for (int x = start; (dir > 0) ? (x < end) : (x > end); x += step) {
-    checkSerialCommand();   // 'g' = crazy mode, 'c' = calibration
+    checkSerialCommand();   // 'g' crazy, 'c' calibrate, 'l' toggle lock
     writeServo(x);
 
     int lead = x - dir * 4;
@@ -546,8 +564,80 @@ void sweep(int start, int end, int step)
     drawBlip(x, distance);
     DBG_DEG(x, distance);
 
+    if (gLockEnabled && distance >= 0 && distance < bestDist) {
+      bestDist = distance;
+      bestDeg  = x;
+      locked   = true;
+    }
+
     if (x > 70 && x < 110) fix_font();  // redraw labels the sweep passes over
 
     drawReadout(x, distance);
+  }
+
+  if (locked) {
+    int tx = BLIP_SCALE * bestDist * cos(radians(bestDeg)) + Xcent;
+    int ty = -(BLIP_SCALE * bestDist * sin(radians(bestDeg))) + base;
+    drawTargetLock(tx, ty, bestDist, bestDeg);
+    if (bestDist <= ALERT_CM) proximityAlert();
+  }
+}
+
+// Animated targeting reticle around the locked contact, with a callout.
+void drawTargetLock(int x, int y, int distance, int deg)
+{
+  // Pulse the corner brackets in/out a couple of times.
+  for (int frame = 0; frame < 3; frame++) {
+    int r = 9 - frame * 2;          // shrinking bracket size = "locking on"
+    int len = 4;
+
+    tc(0);                          // erase previous frame's brackets
+    drawReticle(x, y, r + 2, len + 1);
+    ucg.setColor(255, 0, 0);        // red targeting brackets
+    drawReticle(x, y, r, len);
+
+    // Crosshair center dot.
+    ucg.setColor(255, 255, 255);
+    ucg.drawDisc(x, y, 1, UCG_DRAW_ALL);
+    delay(70);
+  }
+
+  // "LOCK <dist>cm @ <deg>" callout, top-left.
+  ucg.setColor(255, 60, 60);
+  ucg.setPrintPos(20, 10);
+  ucg.print("LOCK ");
+  ucg.print(distance);
+  ucg.print("cm @");
+  ucg.print(deg);
+}
+
+// Four L-shaped corner brackets centered on (x, y).
+void drawReticle(int x, int y, int r, int len)
+{
+  // top-left
+  ucg.drawHLine(x - r, y - r, len);  ucg.drawVLine(x - r, y - r, len);
+  // top-right
+  ucg.drawHLine(x + r - len, y - r, len);  ucg.drawVLine(x + r, y - r, len);
+  // bottom-left
+  ucg.drawHLine(x - r, y + r, len);  ucg.drawVLine(x - r, y + r - len, len);
+  // bottom-right
+  ucg.drawHLine(x + r - len, y + r, len);  ucg.drawVLine(x + r, y + r - len, len);
+}
+
+// Flash a red border + warning text when a contact is dangerously close.
+void proximityAlert(void)
+{
+  for (int i = 0; i < 3; i++) {
+    ucg.setColor(255, 0, 0);
+    ucg.drawFrame(0, 0, Xmax, Ymax);
+    ucg.drawFrame(1, 1, Xmax - 2, Ymax - 2);
+    ucg.setPrintPos(48, 60);
+    ucg.print("! ALERT !");
+    delay(120);
+
+    tc(0);                          // clear border (leaves the radar intact)
+    ucg.drawFrame(0, 0, Xmax, Ymax);
+    ucg.drawFrame(1, 1, Xmax - 2, Ymax - 2);
+    delay(120);
   }
 }
