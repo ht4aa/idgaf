@@ -189,7 +189,22 @@ void checkSerialCommand(void)
     gLockEnabled = !gLockEnabled;
     Serial.print(F("Target Lock: "));
     Serial.println(gLockEnabled ? F("ON") : F("OFF"));
+    banner(gLockEnabled ? "LOCK ON" : "LOCK OFF");
   }
+}
+
+// Brief centered on-screen banner so serial commands give visible feedback.
+void banner(const char *msg)
+{
+  cls();
+  ucg.setFontMode(UCG_FONT_MODE_TRANSPARENT);
+  ucg.setFont(ucg_font_logisoso18_tf);
+  tc(255);
+  ucg.setPrintPos(28, 70);
+  ucg.print(msg);
+  ucg.setFont(ucg_font_orgv01_hr);
+  ucg.setFontMode(UCG_FONT_MODE_SOLID);
+  delay(900);
 }
 
 // Wild random servo dance with an on-screen banner. ~3 seconds, then resumes.
@@ -609,6 +624,8 @@ void drawTargetLock(int x, int y, int distance, int deg)
   ucg.print(distance);
   ucg.print("cm @");
   ucg.print(deg);
+
+  delay(500);   // hold the reticle so it's clearly visible between sweeps
 }
 
 // Four L-shaped corner brackets centered on (x, y).
