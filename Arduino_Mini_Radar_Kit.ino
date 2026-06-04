@@ -63,6 +63,42 @@ const int SWEEP_MIN  = 4;
 const int SWEEP_MAX  = 180;
 const int SWEEP_STEP = 2;
 
+// ---------- Target Lock ----------
+// After each sweep, ring the closest contact with an animated reticle and
+// raise a flashing border alert if it is inside ALERT_CM. Toggle live with 'l'.
+#define DEFAULT_LOCK_ON true     // start with target-lock enabled?
+const int ALERT_CM = 20;         // proximity-alert danger zone
+bool gLockEnabled  = DEFAULT_LOCK_ON;
+
+// ============================================================================
+//  Theme
+// ============================================================================
+// Pick the color scheme by uncommenting exactly ONE of these.
+// The whole radar (rings, sweep, text, ticks) is drawn from a single
+// monochrome hue; only the target blips stay red/yellow for contrast.
+//#define THEME_GREEN     // classic military radar
+#define THEME_AMBER       // warm old-CRT look  (default)
+//#define THEME_CYAN      // cool sci-fi blue
+//#define THEME_WHITE     // clean white-on-black
+
+#if defined(THEME_AMBER)
+  #define TR 1.00f
+  #define TG 0.62f
+  #define TB 0.00f
+#elif defined(THEME_CYAN)
+  #define TR 0.00f
+  #define TG 0.90f
+  #define TB 1.00f
+#elif defined(THEME_WHITE)
+  #define TR 1.00f
+  #define TG 1.00f
+  #define TB 1.00f
+#else  // THEME_GREEN
+  #define TR 0.00f
+  #define TG 1.00f
+  #define TB 0.00f
+#endif
+
 // ============================================================================
 //  Calibration
 // ============================================================================
@@ -92,6 +128,18 @@ float gSoundCmPerUs = 0.01717f;
 
 Servo baseServo;
 Ucglib_ST7735_18x128x160_HWSPI ucg(/*cd=*/ 9, /*cs=*/ 10, /*reset=*/ 8);
+
+// Set the active draw color to the theme hue at brightness `i` (0..255).
+void tc(uint8_t i)
+{
+  ucg.setColor((uint8_t)(i * TR), (uint8_t)(i * TG), (uint8_t)(i * TB));
+}
+
+// Same, for a palette index (used by the gradient splash).
+void tcIdx(uint8_t idx, uint8_t i)
+{
+  ucg.setColor(idx, (uint8_t)(i * TR), (uint8_t)(i * TG), (uint8_t)(i * TB));
+}
 
 // ----------------------------------------------------------------------------
 void setup(void)
@@ -123,6 +171,53 @@ void loop(void)
   delay(200);
   sweep(SWEEP_MIN + 1, SWEEP_MAX - 4, SWEEP_STEP);
   delay(100);
+}
+
+// ============================================================================
+//  Runtime serial commands (polled during the sweep)
+//    g  -> "go crazy" servo dance
+//    c  -> open the calibration menu
+//    l  -> toggle Target Lock on/off
+// ============================================================================
+void checkSerialCommand(void)
+{
+  if (!Serial.available()) return;
+  char cmd = Serial.read();
+  if (cmd == 'g')      crazyServo();
+  else if (cmd == 'c') runCalibrationMenu();
+  else if (cmd == 'l') {
+    gLockEnabled = !gLockEnabled;
+    Serial.print(F("Target Lock: "));
+    Serial.println(gLockEnabled ? F("ON") : F("OFF"));
+  }
+}
+
+// Wild random servo dance with an on-screen banner. ~3 seconds, then resumes.
+void crazyServo(void)
+{
+  cls();
+  ucg.setFontMode(UCG_FONT_MODE_TRANSPARENT);
+  ucg.setFont(ucg_font_logisoso18_tf);
+  tc(255);
+  ucg.setPrintPos(18, 70);
+  ucg.print("CRAZY MODE");
+  ucg.setFont(ucg_font_orgv01_hr);
+
+  unsigned long t0 = millis();
+  while (millis() - t0 < 3000) {
+    int angle = random(0, 181);          // random target across full range
+    writeServo(angle);
+
+    // Flash a random-colored marker so the screen goes nuts too.
+    ucg.setColor(random(255), random(255), random(255));
+    ucg.drawDisc(random(Xmax), random(Ymax), 2, UCG_DRAW_ALL);
+
+    delay(random(20, 120));              // jittery, unpredictable timing
+  }
+
+  // Re-center and clear before normal scanning resumes.
+  writeServo(90);
+  cls();
 }
 
 // ============================================================================
@@ -291,8 +386,8 @@ void writeServo(int angle)
 void splashScreen(void)
 {
   ucg.setFontMode(UCG_FONT_MODE_TRANSPARENT);
-  ucg.setColor(0, 0, 100, 0);
-  ucg.setColor(1, 0, 100, 0);
+  tcIdx(0, 100);
+  tcIdx(1, 100);
   ucg.setColor(2, 20, 20, 20);
   ucg.setColor(3, 20, 20, 20);
   ucg.drawGradientBox(0, 0, Xmax, Ymax);
@@ -300,20 +395,20 @@ void splashScreen(void)
   ucg.setPrintDir(0);
 
   ucg.setFont(ucg_font_logisoso18_tf);
-  ucg.setColor(0, 5, 0);
+  tc(5);
   ucg.setPrintPos(27, 42); ucg.print("Mini Radar");
-  ucg.setColor(0, 255, 0);
+  tc(255);
   ucg.setPrintPos(25, 40); ucg.print("Mini Radar");
 
   ucg.setFont(ucg_font_helvB08_tf);
-  ucg.setColor(0, 255, 0);
+  tc(255);
   ucg.setPrintPos(40, 100); ucg.print("Testing...");
 
   // Exercise the servo to check for binding / wire snag.
   writeServo(90);
   for (int x = 0; x < 180; x += 5) { writeServo(x); delay(50); }
 
-  ucg.setColor(0, 255, 0);
+  tc(255);
   ucg.print("OK!");
   delay(500);
 
@@ -332,7 +427,7 @@ void cls(void)
 // Static background: rings, baseline, angle scale, decorations.
 void fix(void)
 {
-  ucg.setColor(0, 40, 0);
+  tc(40);
   ucg.drawDisc(Xcent, base + 1, 3, UCG_DRAW_ALL);
 
   // Four range rings at 25/50/75/100 cm, scaled to fit the screen.
@@ -344,7 +439,7 @@ void fix(void)
   ucg.drawLine(0, base + 1, Xmax, base + 1);
 
   // Angle scale ticks (long every 10 degrees).
-  ucg.setColor(0, 120, 0);
+  tc(120);
   int outer = RADAR_RADIUS - 2;
   for (int i = 40; i < 140; i += 2) {
     int inner = (i % 10 == 0) ? RADAR_RADIUS - 10 : RADAR_RADIUS - 5;
@@ -353,7 +448,7 @@ void fix(void)
   }
 
   // Decorative corner blocks.
-  ucg.setColor(0, 200, 0);
+  tc(200);
   ucg.drawLine(0, 0, 0, 18);
   for (int i = 0; i < 5; i++) {
     ucg.setColor(random(255), random(255), random(255));
@@ -370,7 +465,7 @@ void fix(void)
 
   ucg.setColor(random(255), random(255), random(255));
   ucg.drawBox(148, 2, 4, 4);
-  ucg.setColor(0, 220, 0);
+  tc(220);
   ucg.drawBox(148, 8, 4, 4);
   ucg.setColor(random(255), random(255), random(255));
   ucg.drawBox(154, 8, 4, 4);
@@ -381,7 +476,7 @@ void fix(void)
   ucg.drawTetragon(62, 123, 58, 127, 98, 127, 102, 123);
   ucg.setColor(0, 0, 160);
   ucg.drawTetragon(67, 123, 63, 127, 93, 127, 97, 123);
-  ucg.setColor(0, 255, 0);
+  tc(255);
   ucg.drawTetragon(72, 123, 68, 127, 88, 127, 92, 123);
 
   fix_font();
@@ -390,7 +485,7 @@ void fix(void)
 // Range labels placed next to each ring along the vertical axis.
 void fix_font(void)
 {
-  ucg.setColor(0, 180, 0);
+  tc(180);
   for (uint8_t i = 1; i <= 4; i++) {
     int r = RADAR_RADIUS * i / 4;
     ucg.setPrintPos(66, base - r + 6);
@@ -402,10 +497,10 @@ void fix_font(void)
 // Three-segment fading sweep line at leading angle `lead`, sweep direction `dir`.
 void drawSweepLine(int lead, int dir)
 {
-  const uint8_t greens[3] = {255, 128, 0};   // bright -> dim -> erase
+  const uint8_t levels[3] = {255, 128, 0};   // bright -> dim -> erase
   int a = lead;
   for (int i = 0; i < 3; i++) {
-    ucg.setColor(0, greens[i], 0);
+    tc(levels[i]);
     ucg.drawLine(Xcent, base,
                  scanline * cos(radians(a)) + Xcent,
                  base - scanline * sin(radians(a)));
@@ -434,7 +529,7 @@ void drawBlip(int deg, int distance)
 // Bottom status line.
 void drawReadout(int deg, int distance)
 {
-  ucg.setColor(0, 0, 155, 0);
+  tcIdx(0, 155);
   ucg.setPrintPos(0, 126);   ucg.print("DEG: ");
   ucg.setPrintPos(24, 126);  ucg.print(deg);  ucg.print("   ");
   ucg.setPrintPos(125, 126); ucg.print("   ");
@@ -451,7 +546,13 @@ void sweep(int start, int end, int step)
   cls();
   fix();
 
+  // Track the nearest in-range contact for Target Lock.
+  int  bestDist = MAX_RANGE_CM;
+  int  bestDeg  = 0;
+  bool locked   = false;
+
   for (int x = start; (dir > 0) ? (x < end) : (x > end); x += step) {
+    checkSerialCommand();   // 'g' crazy, 'c' calibrate, 'l' toggle lock
     writeServo(x);
 
     int lead = x - dir * 4;
@@ -463,8 +564,80 @@ void sweep(int start, int end, int step)
     drawBlip(x, distance);
     DBG_DEG(x, distance);
 
+    if (gLockEnabled && distance >= 0 && distance < bestDist) {
+      bestDist = distance;
+      bestDeg  = x;
+      locked   = true;
+    }
+
     if (x > 70 && x < 110) fix_font();  // redraw labels the sweep passes over
 
     drawReadout(x, distance);
+  }
+
+  if (locked) {
+    int tx = BLIP_SCALE * bestDist * cos(radians(bestDeg)) + Xcent;
+    int ty = -(BLIP_SCALE * bestDist * sin(radians(bestDeg))) + base;
+    drawTargetLock(tx, ty, bestDist, bestDeg);
+    if (bestDist <= ALERT_CM) proximityAlert();
+  }
+}
+
+// Animated targeting reticle around the locked contact, with a callout.
+void drawTargetLock(int x, int y, int distance, int deg)
+{
+  // Pulse the corner brackets in/out a couple of times.
+  for (int frame = 0; frame < 3; frame++) {
+    int r = 9 - frame * 2;          // shrinking bracket size = "locking on"
+    int len = 4;
+
+    tc(0);                          // erase previous frame's brackets
+    drawReticle(x, y, r + 2, len + 1);
+    ucg.setColor(255, 0, 0);        // red targeting brackets
+    drawReticle(x, y, r, len);
+
+    // Crosshair center dot.
+    ucg.setColor(255, 255, 255);
+    ucg.drawDisc(x, y, 1, UCG_DRAW_ALL);
+    delay(70);
+  }
+
+  // "LOCK <dist>cm @ <deg>" callout, top-left.
+  ucg.setColor(255, 60, 60);
+  ucg.setPrintPos(20, 10);
+  ucg.print("LOCK ");
+  ucg.print(distance);
+  ucg.print("cm @");
+  ucg.print(deg);
+}
+
+// Four L-shaped corner brackets centered on (x, y).
+void drawReticle(int x, int y, int r, int len)
+{
+  // top-left
+  ucg.drawHLine(x - r, y - r, len);  ucg.drawVLine(x - r, y - r, len);
+  // top-right
+  ucg.drawHLine(x + r - len, y - r, len);  ucg.drawVLine(x + r, y - r, len);
+  // bottom-left
+  ucg.drawHLine(x - r, y + r, len);  ucg.drawVLine(x - r, y + r - len, len);
+  // bottom-right
+  ucg.drawHLine(x + r - len, y + r, len);  ucg.drawVLine(x + r, y + r - len, len);
+}
+
+// Flash a red border + warning text when a contact is dangerously close.
+void proximityAlert(void)
+{
+  for (int i = 0; i < 3; i++) {
+    ucg.setColor(255, 0, 0);
+    ucg.drawFrame(0, 0, Xmax, Ymax);
+    ucg.drawFrame(1, 1, Xmax - 2, Ymax - 2);
+    ucg.setPrintPos(48, 60);
+    ucg.print("! ALERT !");
+    delay(120);
+
+    tc(0);                          // clear border (leaves the radar intact)
+    ucg.drawFrame(0, 0, Xmax, Ymax);
+    ucg.drawFrame(1, 1, Xmax - 2, Ymax - 2);
+    delay(120);
   }
 }
