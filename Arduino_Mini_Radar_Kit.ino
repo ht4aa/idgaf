@@ -126,6 +126,47 @@ void loop(void)
 }
 
 // ============================================================================
+//  Runtime serial commands (polled during the sweep)
+//    g  -> "go crazy" servo dance
+//    c  -> open the calibration menu
+// ============================================================================
+void checkSerialCommand(void)
+{
+  if (!Serial.available()) return;
+  char cmd = Serial.read();
+  if (cmd == 'g')      crazyServo();
+  else if (cmd == 'c') runCalibrationMenu();
+}
+
+// Wild random servo dance with an on-screen banner. ~3 seconds, then resumes.
+void crazyServo(void)
+{
+  cls();
+  ucg.setFontMode(UCG_FONT_MODE_TRANSPARENT);
+  ucg.setFont(ucg_font_logisoso18_tf);
+  ucg.setColor(0, 255, 0);
+  ucg.setPrintPos(18, 70);
+  ucg.print("CRAZY MODE");
+  ucg.setFont(ucg_font_orgv01_hr);
+
+  unsigned long t0 = millis();
+  while (millis() - t0 < 3000) {
+    int angle = random(0, 181);          // random target across full range
+    writeServo(angle);
+
+    // Flash a random-colored marker so the screen goes nuts too.
+    ucg.setColor(random(255), random(255), random(255));
+    ucg.drawDisc(random(Xmax), random(Ymax), 2, UCG_DRAW_ALL);
+
+    delay(random(20, 120));              // jittery, unpredictable timing
+  }
+
+  // Re-center and clear before normal scanning resumes.
+  writeServo(90);
+  cls();
+}
+
+// ============================================================================
 //  Calibration: storage
 // ============================================================================
 void loadCalib(void)
@@ -452,6 +493,7 @@ void sweep(int start, int end, int step)
   fix();
 
   for (int x = start; (dir > 0) ? (x < end) : (x > end); x += step) {
+    checkSerialCommand();   // 'g' = crazy mode, 'c' = calibration
     writeServo(x);
 
     int lead = x - dir * 4;
